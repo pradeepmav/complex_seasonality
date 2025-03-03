@@ -1,0 +1,176 @@
+---
+title: "15 Min Frequency Electricity Load | Complex Seasonality"
+jupyter: python3
+author: "Dr Pradeep K Mavuluri PhD"
+format:
+  html:
+    toc: false
+    echo: false
+    code-tools: false
+    other-links:
+      - text: Author Linkedin Profile
+        href: https://www.linkedin.com/in/pradeepmavuluri/
+      - text: Author GitHub Link
+        href: https://www.github.com/pradeepmav/
+execute:
+    warning: false    
+---
+
+Higher frequency time series often exhibit complex seasonal patterns, for example, 15-minute interval data will have multiple seasonality at hourly, daily, weekly, seasonal (winter, summer, etc) and so on. And regular time series method cannot deal with such complex seasonality. Hence, adding Fourier terms helps us in better predictions. Using a real-time simulated data of 15 minute interval thermal power-station generated electricity load from a particular grid [Electicity Load Data](https://github.com/pradeepmav/15_Min_Freq_Electricity_Load_Forecasting), this quick notebook provides glimpse of identifying such complexities in high frequency data.
+
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
+import polars as pl
+from statsmodels.tsa.seasonal import STL
+from plotly.subplots import make_subplots
+```
+
+
+```{python}
+elec_loadings = pl.read_csv(
+    "C:\\PM_Files\\Cos_Projects\\Kaggle\\Deviation_Forecasts\\15Min_Electricity_Load_Data.csv"
+)
+
+elec_loadings = elec_loadings.with_columns(
+    pl.col("Day_Interval").str.strptime(pl.Datetime, "%d-%b-%Y %H:%M")
+).sort("Day_Interval")
+
+elec_loadings.head()
+```
+
+```{python}
+pio.renderers.default = "iframe"
+
+fig = px.line(
+    elec_loadings.to_pandas(),
+    x="Day_Interval",
+    y="Frequency_in_Hz",
+    title="Frequency in Hz over Time",
+)
+fig.update_layout(
+    xaxis_title="15-Min Daily Interval", yaxis_title="Frequency in Hz", template="plotly_white"
+)
+fig.show()
+```
+
+
+```{python}
+pdfeone = (
+    elec_loadings.to_pandas()
+    .set_index("Day_Interval")
+    .drop(["UI_Penalty_INR_per_kwh"], axis=1)
+)
+stl = STL(
+    pdfeone, period=96
+)  # Adjusted period to match daily seasonality (96 intervals of 15 minutes in a day)
+res = stl.fit()
+
+# Create interactive plot
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.1,
+    subplot_titles=("Trend", "Seasonal", "Residual"),
+)
+
+# Add trend component
+fig.add_trace(
+    go.Scatter(x=pdfeone.index, y=res.trend, mode="lines", name="Trend"), row=1, col=1
+)
+# Add seasonal component
+fig.add_trace(
+    go.Scatter(x=pdfeone.index, y=res.seasonal, mode="lines", name="Seasonal"),
+    row=2,
+    col=1,
+)
+
+# Update layout
+fig.update_layout(
+    height=800,
+    title="STL Decomposition",
+    xaxis_title="15-Min Interval",
+    yaxis_title="Frequency (Hz)",
+    template="plotly_white",
+)
+
+fig.show()
+
+```
+
+From above plots, it is very hard to tell or identify regular seasonal patterns due to multiple complexities. Hence as a next step let us transform the data into frequency domain and see if there are any interesting insights from such 15 minute interval data. For that let's exploit Fourier transformations a that converts a time series from the time domain (data as observed over time) to the frequency domain (data as periodic signals). Essentially, it expresses a time series as a sum of sine and cosine waves with different frequencies and amplitudes.
+
+
+```{python}
+load_freqs = np.array(elec_loadings["Frequency_in_Hz"])
+fft_values = np.fft.fft(load_freqs)
+total_period = len(fft_values)
+time_len = np.arange(total_period)
+# our sampling rate is 15 minute interval per hour
+sampling_rate = 1 / (4)
+time_points = total_period / sampling_rate
+freqs = time_len / time_points
+n_oneside = total_period // 2
+f_oneside = freqs[:n_oneside]
+t_h = 1 / f_oneside / (1 * 4)
+
+# plt.figure(figsize=(12, 6))
+# plt.plot(t_h, np.abs(fft_values[:n_oneside]) / n_oneside)
+# plt.xticks([1, 2, 4, 8, 16, 32, 64, 96, 192, 384, 672])
+# plt.xlim(0, 700)
+# plt.xlabel("Period ($hour$)")
+# plt.show()
+```
+
+```{python}
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=t_h,
+        y=np.abs(fft_values[:n_oneside]) / n_oneside,
+        mode="lines",
+        name="Load Frequency",
+        showlegend=False,
+    )
+)
+
+spike_threshold = np.max(np.abs(fft_values[:n_oneside]) / n_oneside) * 0.01
+spike_indices = np.where(np.abs(fft_values[:n_oneside]) / n_oneside > spike_threshold)[
+    0
+]
+spike_periods = t_h[spike_indices]
+spike_amplitudes = np.abs(fft_values[:n_oneside])[spike_indices] / n_oneside
+
+fig.add_trace(
+    go.Scatter(
+        x=spike_periods,
+        y=spike_amplitudes,
+        mode="markers",
+        name="Spikes",
+        marker=dict(color="red", size=8),
+        showlegend=False,
+    )
+)
+
+fig.update_layout(
+    title={"text": "Peaks in the Load Freqs", "x": 0.5, "xanchor": "center"},
+    xaxis=dict(
+        title="Period (hours)",
+        tickvals=[1, 4, 8, 16, 36, 72, 96, 192, 384, 768],
+        range=[0, 700],
+    ),
+    yaxis=dict(
+        title="Frequency (Hz)",
+        range=[0, np.max(np.abs(fft_values[:n_oneside]) / n_oneside) * 0.0005],
+    ),
+    template="plotly_white",
+)
+fig.show()
+```
+
+Now we can see some interesting patterns, i.e. multiple peaks associate at differnt hours which are plotted upto a week. As it is evident few peaks at 4, 48, 96 translates to every four (4) hours, twelve (12) hours and twenty four (24) hours have heavy peaks indicating repeating signal at these hours. Thus adding Fourier transformations can help us to understand some of the repeating signal in high frequency data and also towards better predictions.
