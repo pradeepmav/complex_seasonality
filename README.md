@@ -1,1 +1,1 @@
-Visit https://pradeepmav.github.io/complex_seasonality/ for understandign high frequency complex seasonality.
+Visit https://pradeepmav.github.io/complex_seasonality/ for understanding high frequency complex seasonality.
